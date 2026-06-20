@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -312,7 +313,8 @@ async def v1_completions(req: OpenAICompletionRequest, request: Request):
 @app.get("/v1/models")
 async def available_models():
     state = get_global_state()
-    return ModelList(data=[ModelCard(id=state.config.model_path, root=state.config.model_path)])
+    model_name = os.path.basename(os.path.normpath(state.config.model_path))
+    return ModelList(data=[ModelCard(id=model_name, root=state.config.model_path)])
 
 
 async def shell_completion(req: OpenAICompletionRequest):
@@ -395,9 +397,11 @@ async def shell():
     except EOFError:
         # user pressed Ctrl-D
         pass
+    except KeyboardInterrupt:
+        # user pressed Ctrl-C
+        pass
     finally:
         print("Exiting shell...")
-        await asyncio.sleep(0.1)
         get_global_state().shutdown()
         # then kill all the subprocesses
         import psutil
@@ -407,13 +411,13 @@ async def shell():
             child.kill()
 
 
-def run_api_server(config: ServerArgs, start_backend: Callable[[], None], run_shell: bool) -> None:
+def run_api_server(config: ServerArgs, start_worker: Callable[[], None], run_shell: bool) -> None:
     """
     Run the frontend API server (FastAPI + uvicorn) and wire it to the tokenizer process via ZMQ.
 
     Args:
         config: Server configuration (host/port, ZMQ IPC addresses, etc).
-        start_backend: Callback that launches the worker processes (tokenizer/detokenizer
+        start_worker: Callback that launches the worker processes (tokenizer/detokenizer
             and, if applicable, the external backend bridge).
         run_shell: If True, run an interactive terminal shell instead of starting uvicorn.
     """
@@ -439,7 +443,7 @@ def run_api_server(config: ServerArgs, start_backend: Callable[[], None], run_sh
     )
 
     # start the backend here
-    start_backend()
+    start_worker()
 
     logger.info(f"API server is ready to serve on {host}:{port}")
     if not run_shell:

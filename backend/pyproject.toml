@@ -1,0 +1,19 @@
+[project]
+name = "learn-infra-backend"
+version = "0.1.0"
+description = "Backend service for learn-infra. Talks to the frontend over ZMQ."
+license = { file = "../LICENSE" }
+authors = [
+    { name = "Zhou Chang", email = "achang.zhou@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "msgpack",
+    "pyzmq",
+    "numpy",
+]
+
+# No package to build — this project is just a collection of scripts run
+# directly via `uv run python fake.py`. Skip hatchling entirely.
+[tool.uv]
+package = false

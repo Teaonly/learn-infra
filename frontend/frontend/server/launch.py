@@ -29,7 +29,7 @@ def _spawn_tokenizer(server_args: "ServerArgs", ack_queue: "mp.Queue[str]") -> N
             "tokenizer_id": num_tokenizers,
             "ack_queue": ack_queue,
         },
-        daemon=False,
+        daemon=True,
         name="learninfra-detokenizer-0",
     ).start()
 
@@ -46,7 +46,7 @@ def _spawn_tokenizer(server_args: "ServerArgs", ack_queue: "mp.Queue[str]") -> N
                 "tokenizer_id": i,
                 "ack_queue": ack_queue,
             },
-            daemon=False,
+            daemon=True,
             name=f"learninfra-tokenizer-{i}",
         ).start()
 

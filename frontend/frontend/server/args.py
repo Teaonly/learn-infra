@@ -40,6 +40,18 @@ class ServerArgs:
     def share_tokenizer(self) -> bool:
         return self.num_tokenizer == 0
 
+    # IPC slot numbering (mirrors SGLang's convention):
+    #   _0  tokenizer → backend
+    #   _1  backend   → detokenizer
+    #   _2  RESERVED  backend → detokenizer control channel (abort / state sync).
+    #                 Topology (decided): detokenizer binds PULL, backend
+    #                 connects PUSH — same shape as _1 in shared mode.
+    #                 Detokenizer owns the file lifecycle; when implemented,
+    #                 add _2 to frontend's rm list in run.sh and bind it in
+    #                 launch.py alongside _1. Today: unused, file never created.
+    #   _3  detokenizer → HTTP API
+    #   _4  HTTP API  → tokenizer (only when num_tokenizer > 0)
+
     @property
     def zmq_backend_addr(self) -> str:
         # Tokenizer → backend (scheduler) link
