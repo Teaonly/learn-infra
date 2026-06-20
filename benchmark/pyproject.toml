@@ -1,0 +1,19 @@
+[project]
+name = "learn-infra-benchmark"
+version = "0.1.0"
+description = "Online benchmarks for learn-infra. Talks to the frontend HTTP API."
+license = { file = "../LICENSE" }
+authors = [
+    { name = "Zhou Chang", email = "achang.zhou@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "openai",
+    "pydantic",
+    "tqdm",
+]
+
+# No package to build — this project is just a collection of scripts run
+# directly via `uv run python online/bench_simple.py`. Skip hatchling entirely.
+[tool.uv]
+package = false

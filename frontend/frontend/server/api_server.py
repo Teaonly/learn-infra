@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Literal, Tuple
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from frontend.sampling import SamplingParams
 from frontend.message import (
@@ -61,6 +61,10 @@ class Message(BaseModel):
     content: str
 
 
+class StreamOptions(BaseModel):
+    include_usage: bool = False
+
+
 class OpenAICompletionRequest(BaseModel):
     """Unified request model for OpenAI-style completions and chat-completions."""
 
@@ -76,6 +80,7 @@ class OpenAICompletionRequest(BaseModel):
     top_p: float = 1.0
     n: int = 1
     stream: bool = False
+    stream_options: StreamOptions | None = None
     stop: List[str] = []
     presence_penalty: float = 0.0
     frequency_penalty: float = 0.0
@@ -157,8 +162,10 @@ class FrontendManager:
         yield "data: [DONE]\n".encode()
         logger.debug("Finished streaming response for user %s", uid)
 
-    async def stream_chat_completions(self, uid: int):
+    async def stream_chat_completions(self, uid: int, include_usage: bool = False):
         first_chunk = True
+        prompt_tokens = 0
+        completion_tokens = 0
         async for ack in self.wait_for_ack(uid):
             delta = {}
             if first_chunk:
@@ -169,21 +176,39 @@ class FrontendManager:
 
             chunk = {
                 "id": f"cmpl-{uid}",
-                "object": "text_completion.chunk",
+                "object": "chat.completion.chunk",
                 "choices": [{"delta": delta, "index": 0, "finish_reason": None}],
             }
             yield f"data: {json.dumps(chunk)}\n\n".encode()
 
             if ack.finished:
+                prompt_tokens = ack.prompt_tokens
+                completion_tokens = ack.completion_tokens
                 break
 
         # send final finish_reason
         end_chunk = {
             "id": f"cmpl-{uid}",
-            "object": "text_completion.chunk",
+            "object": "chat.completion.chunk",
             "choices": [{"delta": {}, "index": 0, "finish_reason": "stop"}],
         }
         yield f"data: {json.dumps(end_chunk)}\n\n".encode()
+
+        # Per OpenAI spec: when stream_options.include_usage=true, emit a final
+        # chunk with empty choices and the usage totals, before [DONE].
+        if include_usage:
+            usage_chunk = {
+                "id": f"cmpl-{uid}",
+                "object": "chat.completion.chunk",
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                },
+            }
+            yield f"data: {json.dumps(usage_chunk)}\n\n".encode()
+
         yield b"data: [DONE]\n\n"
         logger.debug("Finished streaming response for user %s", uid)
 
@@ -255,6 +280,12 @@ async def v1_root():
 @app.post("/v1/chat/completions")
 async def v1_completions(req: OpenAICompletionRequest, request: Request):
     state = get_global_state()
+    expected_model = os.path.basename(os.path.normpath(state.config.model_path))
+    if req.model != expected_model:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{req.model}' not found. Available: ['{expected_model}']",
+        )
     if req.messages:
         prompt = [msg.model_dump() for msg in req.messages]
     else:
@@ -278,16 +309,25 @@ async def v1_completions(req: OpenAICompletionRequest, request: Request):
     )
 
     if req.stream:
+        include_usage = bool(req.stream_options and req.stream_options.include_usage)
         return StreamingResponse(
-            state.stream_with_cancellation(state.stream_chat_completions(uid), request, uid),
+            state.stream_with_cancellation(
+                state.stream_chat_completions(uid, include_usage=include_usage),
+                request,
+                uid,
+            ),
             media_type="text/event-stream",
         )
 
     # Non-streaming: collect all chunks and return a single JSON response
     full_content = ""
+    prompt_tokens = 0
+    completion_tokens = 0
     async for ack in state.wait_for_ack(uid):
         full_content += ack.incremental_output
         if ack.finished:
+            prompt_tokens = ack.prompt_tokens
+            completion_tokens = ack.completion_tokens
             break
 
     return {
@@ -303,9 +343,9 @@ async def v1_completions(req: OpenAICompletionRequest, request: Request):
             }
         ],
         "usage": {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
         },
     }
 

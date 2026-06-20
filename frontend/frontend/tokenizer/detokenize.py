@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from frontend.message import DetokenizeMsg
 from transformers import PreTrainedTokenizerBase
@@ -67,7 +67,12 @@ class DetokenizeManager:
         self.tokenizer = tokenizer
         self.eos_token_id = self.tokenizer.eos_token_id
 
-    def detokenize(self, msgs: List[DetokenizeMsg]) -> List[str]:
+    def detokenize(self, msgs: List[DetokenizeMsg]) -> List[Tuple[str, int]]:
+        """Returns one (incremental_output, completion_tokens) per msg.
+
+        completion_tokens is the running count of generated (non-EOS) tokens
+        for that uid; it is final when msg.finished=True.
+        """
         read_ids: List[List[int]] = []
         surr_ids: List[List[int]] = []
         for msg in msgs:
@@ -88,7 +93,7 @@ class DetokenizeManager:
         read_texts = self.tokenizer.batch_decode(read_ids)
         surr_texts = self.tokenizer.batch_decode(surr_ids)
 
-        incremental_strs: List[str] = []
+        results: List[Tuple[str, int]] = []
         for msg, read_str, surr_str in zip(msgs, read_texts, surr_texts, strict=True):
             s = self.decode_map[msg.uid]
             new_text = read_str[len(surr_str) :]
@@ -104,8 +109,9 @@ class DetokenizeManager:
 
             incremental_output = output_str[s.sent_offset :]
             s.sent_offset = len(output_str)
-            incremental_strs.append(incremental_output)
+            completion_tokens = len(s.decoded_ids)
+            results.append((incremental_output, completion_tokens))
             if msg.finished:
                 del self.decode_map[msg.uid]
 
-        return incremental_strs
+        return results

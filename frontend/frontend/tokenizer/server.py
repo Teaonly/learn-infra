@@ -52,6 +52,12 @@ def tokenize_worker(
     tokenize_manager = TokenizeManager(tokenizer)
     detokenize_manager = DetokenizeManager(tokenizer)
 
+    # uid -> prompt_tokens. Filled in on tokenize, consumed on the matching
+    # finished detokenize reply. Only meaningful in shared mode
+    # (num_tokenizer=0) where this process handles both flows; in dedicated
+    # mode the detokenizer process won't see these and prompt_tokens stays 0.
+    prompt_tokens: dict[int, int] = {}
+
     if ack_queue is not None:
         ack_queue.put(f"Tokenize server {tokenizer_id} is ready")
 
@@ -73,10 +79,14 @@ def tokenize_worker(
                     data=[
                         UserReply(
                             uid=msg.uid,
-                            incremental_output=reply,
+                            incremental_output=incremental,
                             finished=msg.finished,
+                            prompt_tokens=prompt_tokens.pop(msg.uid, 0) if msg.finished else 0,
+                            completion_tokens=count if msg.finished else 0,
                         )
-                        for msg, reply in zip(detokenize_msg, replies, strict=True)
+                        for msg, (incremental, count) in zip(
+                            detokenize_msg, replies, strict=True
+                        )
                     ]
                 )
                 if len(batch_output.data) == 1:
@@ -85,6 +95,8 @@ def tokenize_worker(
 
             if len(tokenize_msg) > 0:
                 tensors = tokenize_manager.tokenize(tokenize_msg)
+                for msg, t in zip(tokenize_msg, tensors, strict=True):
+                    prompt_tokens[msg.uid] = int(t.shape[0])
                 batch_output = BatchBackendMsg(
                     data=[
                         UserMsg(
@@ -99,6 +111,8 @@ def tokenize_worker(
                     batch_output = batch_output.data[0]
                 send_backend.put(batch_output)
             if len(abort_msg) > 0:
+                for msg in abort_msg:
+                    prompt_tokens.pop(msg.uid, None)
                 batch_output = BatchBackendMsg(
                     data=[AbortBackendMsg(uid=msg.uid) for msg in abort_msg]
                 )
