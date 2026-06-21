@@ -10,7 +10,7 @@ detokenizer → HTTP pipeline and verifying streaming chunks + the
 `finished=True` end signal without a GPU or real model weights.
 
 Usage:
-    python fake.py <socket-base> [model-path]
+    python main.py <socket-base> [model-path]
 
 Assumes the frontend was launched with `num_tokenizer=0` (the default,
 "shared mode"), so the detokenizer worker binds `_1` and we connect to

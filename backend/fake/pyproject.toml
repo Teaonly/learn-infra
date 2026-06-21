@@ -2,7 +2,7 @@
 name = "learn-infra-backend"
 version = "0.1.0"
 description = "Backend service for learn-infra. Talks to the frontend over ZMQ."
-license = { file = "../LICENSE" }
+license = { file = "../../LICENSE" }
 authors = [
     { name = "Zhou Chang", email = "achang.zhou@gmail.com" }
 ]

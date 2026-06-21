@@ -33,10 +33,10 @@ case "${1:-}" in
     backend)
         [[ -d "$MODEL_PATH" ]] || { echo "Error: MODEL_PATH '$MODEL_PATH' not found. Edit $0." >&2; exit 1; }
         rm -f "${SOCKET_BASE}"_0
-        cd "$(pwd)/backend"
         case "${2:-fake}" in
             fake)
-                exec uv run python fake.py "$SOCKET_BASE" "$MODEL_PATH"
+                cd "$(pwd)/backend/fake"
+                exec uv run python main.py "$SOCKET_BASE" "$MODEL_PATH"
                 ;;
             real)
                 echo "Backend is not implemented yet. Use 'fake' mode for testing." >&2
