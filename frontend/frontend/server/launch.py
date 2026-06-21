@@ -13,6 +13,13 @@ logger = init_logger(__name__, "initializer")
 
 
 def _spawn_tokenizer(server_args: "ServerArgs", ack_queue: "mp.Queue[str]") -> None:
+    """Launch the detokenizer worker plus N tokenizer workers.
+
+    Topology (dedicated-only): the backend owns _B2Dt (PUSH bind); the
+    detokenizer connects PULL to it. The frontend owns _F2T (HTTP PUSH bind);
+    each tokenizer connects PULL to it. All workers PUSH-connect to _T2B
+    (backend owns PULL bind) and PUSH-connect to _Dt2F (HTTP owns PULL bind).
+    """
     from frontend.tokenizer import tokenize_worker
 
     num_tokenizers = server_args.num_tokenizer
@@ -25,7 +32,7 @@ def _spawn_tokenizer(server_args: "ServerArgs", ack_queue: "mp.Queue[str]") -> N
             "backend_addr": server_args.zmq_backend_addr,
             "frontend_addr": server_args.zmq_frontend_addr,
             "local_bs": 1,
-            "create": server_args.tokenizer_create_addr,
+            "create": False,  # backend binds _B2Dt
             "tokenizer_id": num_tokenizers,
             "ack_queue": ack_queue,
         },
@@ -42,7 +49,7 @@ def _spawn_tokenizer(server_args: "ServerArgs", ack_queue: "mp.Queue[str]") -> N
                 "backend_addr": server_args.zmq_backend_addr,
                 "frontend_addr": server_args.zmq_frontend_addr,
                 "local_bs": 1,
-                "create": server_args.tokenizer_create_addr,
+                "create": False,  # HTTP binds _F2T
                 "tokenizer_id": i,
                 "ack_queue": ack_queue,
             },
@@ -67,11 +74,10 @@ def launch_server(run_shell: bool = False) -> None:
     server_args, run_shell = parse_args(sys.argv[1:], run_shell)
 
     logger.info("ZMQ IPC base: %s", server_args.socket_base)
+    logger.info("  HTTP API → tokenizer: %s", server_args.zmq_tokenizer_addr)
     logger.info("  tokenizer → backend : %s", server_args.zmq_backend_addr)
-    logger.info("  backend  → detok    : %s", server_args.zmq_detokenizer_addr)
-    logger.info("  detok    → HTTP API : %s", server_args.zmq_frontend_addr)
-    if not server_args.share_tokenizer:
-        logger.info("  HTTP API → tokenizer: %s", server_args.zmq_tokenizer_addr)
+    logger.info("  backend   → detok   : %s", server_args.zmq_detokenizer_addr)
+    logger.info("  detok     → HTTP API: %s", server_args.zmq_frontend_addr)
 
     def start_subprocess() -> None:
         mp.set_start_method("spawn", force=True)

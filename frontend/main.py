@@ -17,7 +17,8 @@ Common options (full list in frontend/server/args.py):
     --port PORT            HTTP bind port.        (default: 1919)
     --socket-path PATH     ZMQ IPC base path shared with the backend process.
                            Defaults to a PID-suffixed /tmp/learninfra* path.
-    --num-tokenizer N      Number of tokenizer workers. 0 = shared with detok.
+    --num-tokenizer N      Number of tokenizer worker processes (>=1, default 1).
+                           The detokenizer always runs as a separate process.
     --shell-mode           Interactive shell mode (implies silent output).
 
 Examples:

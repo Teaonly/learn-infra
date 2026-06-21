@@ -1,8 +1,8 @@
 """Debug-only fake backend for IPC smoke testing.
 
-Not a real backend. Reads `UserMsg` from `ipc://{base}_0` (PULL/bind),
+Not a real backend. Reads `UserMsg` from `ipc://{base}_T2B` (PULL/bind),
 ignores the input, and streams the fixed `REPLAY_TOKENS` back as one
-`DetokenizeMsg` per token to `ipc://{base}_1` (PUSH/connect). The
+`DetokenizeMsg` per token to `ipc://{base}_B2Dt` (PUSH/bind). The
 frontend's detokenizer worker turns those tokens into text, so the
 end-to-end effect visible through HTTP is a fixed, deterministic stream
 — useful for exercising the full HTTP → tokenizer → backend →
@@ -12,10 +12,13 @@ detokenizer → HTTP pipeline and verifying streaming chunks + the
 Usage:
     python main.py <socket-base> [model-path]
 
-Assumes the frontend was launched with `num_tokenizer=0` (the default,
-"shared mode"), so the detokenizer worker binds `_1` and we connect to
-it. If you ever launch the frontend with `--num-tokenizer N>0`, flip
-`send.connect` below to `send.bind`.
+Topology: the backend always owns both bind sides:
+    ipc://{base}_T2B   PULL bind    (receives UserMsg from tokenizer)
+    ipc://{base}_B2Dt  PUSH bind    (sends DetokenizeMsg to detokenizer)
+
+Start the frontend first so the detokenizer is connecting to `_B2Dt`
+before we start emitting; otherwise the first few PUSH frames buffer in
+the local socket until a peer connects.
 
 `model-path` is currently unused — this backend emits a fixed token
 sequence, so no tokenizer is needed. It's accepted only to match the
@@ -62,6 +65,7 @@ class UserMsg:
     uid: int
     input_ids: np.ndarray  # 1D int32, decoded from the torch.Tensor wire format
     sampling_params: SamplingParams
+    prompt_tokens: int = 0  # filled by the tokenizer; we forward it on finish
 
 
 @dataclass
@@ -69,6 +73,7 @@ class DetokenizeMsg:
     uid: int
     next_token: int
     finished: bool
+    prompt_tokens: int = 0  # only meaningful on the finished frame
 
 
 # ---- (De)serialization -------------------------------------------------------
@@ -120,6 +125,7 @@ def pack_detokenize(msg: DetokenizeMsg) -> Any:
             "uid": msg.uid,
             "next_token": int(msg.next_token),
             "finished": msg.finished,
+            "prompt_tokens": int(msg.prompt_tokens),
         },
         use_bin_type=True,
     )
@@ -132,13 +138,13 @@ def main(socket_base: str, _model_path: str | None = None) -> None:
     ctx = zmq.Context()
 
     recv = ctx.socket(zmq.PULL)
-    recv.bind(f"ipc://{socket_base}_0")
+    recv.bind(f"ipc://{socket_base}_T2B")
 
     send = ctx.socket(zmq.PUSH)
-    send.connect(f"ipc://{socket_base}_1")
+    send.bind(f"ipc://{socket_base}_B2Dt")
 
-    print(f"[fake-backend] pull: ipc://{socket_base}_0", flush=True)
-    print(f"[fake-backend] push: ipc://{socket_base}_1", flush=True)
+    print(f"[fake-backend] pull: ipc://{socket_base}_T2B", flush=True)
+    print(f"[fake-backend] push: ipc://{socket_base}_B2Dt", flush=True)
 
     while True:
         raw = recv.recv()
@@ -153,15 +159,22 @@ def main(socket_base: str, _model_path: str | None = None) -> None:
 def _handle(msg: UserMsg, send: zmq.Socket) -> None:
     # Stream the fixed REPLAY_TOKENS regardless of input — exercises the
     # frontend's streaming path and the finished=True end signal without
-    # depending on actual input content.
+    # depending on actual input content. The final frame carries
+    # prompt_tokens back to the detokenizer so HTTP usage stats are right.
     last = len(REPLAY_TOKENS) - 1
     for i, tok in enumerate(REPLAY_TOKENS):
         send.send(pack_detokenize(
-            DetokenizeMsg(uid=msg.uid, next_token=int(tok), finished=i == last)
+            DetokenizeMsg(
+                uid=msg.uid,
+                next_token=int(tok),
+                finished=i == last,
+                prompt_tokens=msg.prompt_tokens if i == last else 0,
+            )
         ))
         time.sleep(STREAM_DELAY_S)
     print(
-        f"[fake-backend] uid={msg.uid} -> {len(REPLAY_TOKENS)} fixed tokens",
+        f"[fake-backend] uid={msg.uid} prompt_tokens={msg.prompt_tokens} -> "
+        f"{len(REPLAY_TOKENS)} fixed tokens",
         flush=True,
     )
 

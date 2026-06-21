@@ -29,6 +29,10 @@ class DetokenizeMsg(BaseTokenizerMsg):
     uid: int
     next_token: int
     finished: bool
+    # Meaningful only when finished=True: the backend forwards the prompt
+    # token count it received on the matching UserMsg so the detokenizer can
+    # populate UserReply.prompt_tokens without tokenizer-side state.
+    prompt_tokens: int = 0
 
 
 @dataclass

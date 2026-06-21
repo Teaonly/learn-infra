@@ -39,6 +39,11 @@ def tokenize_worker(
     tokenizer_id: int = -1,
     ack_queue: mp.Queue[str] | None = None,
 ) -> None:
+    # `addr` decides which flow this process handles:
+    #   - detokenizer_addr (_B2Dt)  → PULL from backend, PUSH to HTTP (_Dt2F)
+    #   - tokenizer_addr  (_F2T)    → PULL from HTTP,  PUSH to backend (_T2B)
+    # In both cases the worker PUSH-connects (backend/HTTP own the bind side).
+    # `create` is forwarded for parity but is always False in dedicated topology.
     send_backend = ZmqPushQueue(backend_addr, create=False, encoder=BaseBackendMsg.encoder)
     send_frontend = ZmqPushQueue(frontend_addr, create=False, encoder=BaseFrontendMsg.encoder)
     recv_listener = ZmqPullQueue(addr, create=create, decoder=BatchTokenizerMsg.decoder)
@@ -51,12 +56,6 @@ def tokenize_worker(
 
     tokenize_manager = TokenizeManager(tokenizer)
     detokenize_manager = DetokenizeManager(tokenizer)
-
-    # uid -> prompt_tokens. Filled in on tokenize, consumed on the matching
-    # finished detokenize reply. Only meaningful in shared mode
-    # (num_tokenizer=0) where this process handles both flows; in dedicated
-    # mode the detokenizer process won't see these and prompt_tokens stays 0.
-    prompt_tokens: dict[int, int] = {}
 
     if ack_queue is not None:
         ack_queue.put(f"Tokenize server {tokenizer_id} is ready")
@@ -81,7 +80,9 @@ def tokenize_worker(
                             uid=msg.uid,
                             incremental_output=incremental,
                             finished=msg.finished,
-                            prompt_tokens=prompt_tokens.pop(msg.uid, 0) if msg.finished else 0,
+                            # Only the finished reply needs the totals; the
+                            # backend forwards prompt_tokens via DetokenizeMsg.
+                            prompt_tokens=msg.prompt_tokens if msg.finished else 0,
                             completion_tokens=count if msg.finished else 0,
                         )
                         for msg, (incremental, count) in zip(
@@ -95,14 +96,13 @@ def tokenize_worker(
 
             if len(tokenize_msg) > 0:
                 tensors = tokenize_manager.tokenize(tokenize_msg)
-                for msg, t in zip(tokenize_msg, tensors, strict=True):
-                    prompt_tokens[msg.uid] = int(t.shape[0])
                 batch_output = BatchBackendMsg(
                     data=[
                         UserMsg(
                             uid=msg.uid,
                             input_ids=t,
                             sampling_params=msg.sampling_params,
+                            prompt_tokens=int(t.shape[0]),
                         )
                         for msg, t in zip(tokenize_msg, tensors, strict=True)
                     ]
@@ -111,8 +111,6 @@ def tokenize_worker(
                     batch_output = batch_output.data[0]
                 send_backend.put(batch_output)
             if len(abort_msg) > 0:
-                for msg in abort_msg:
-                    prompt_tokens.pop(msg.uid, None)
                 batch_output = BatchBackendMsg(
                     data=[AbortBackendMsg(uid=msg.uid) for msg in abort_msg]
                 )

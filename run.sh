@@ -9,11 +9,13 @@ SOCKET_BASE="/tmp/learninfra"
 export MODEL_PATH
 
 # Each side cleans only the IPC files it binds, so frontend and backend
-# can be started in any order. (Shared mode, num_tokenizer=0.)
+# can be started in any order. Topology is always dedicated:
+#   frontend binds: _Dt2F (detok→HTTP), _F2T (HTTP→tok)
+#   backend  binds: _T2B (tok→backend), _B2Dt (backend→detok)
 case "${1:-}" in
     frontend)
         [[ -d "$MODEL_PATH" ]] || { echo "Error: MODEL_PATH '$MODEL_PATH' not found. Edit $0." >&2; exit 1; }
-        rm -f "${SOCKET_BASE}"_1 "${SOCKET_BASE}"_3
+        rm -f "${SOCKET_BASE}"_Dt2F "${SOCKET_BASE}"_F2T
         cd "$(pwd)/frontend"
         case "${2:-serve}" in
             serve)
@@ -32,7 +34,7 @@ case "${1:-}" in
         ;;
     backend)
         [[ -d "$MODEL_PATH" ]] || { echo "Error: MODEL_PATH '$MODEL_PATH' not found. Edit $0." >&2; exit 1; }
-        rm -f "${SOCKET_BASE}"_0
+        rm -f "${SOCKET_BASE}"_T2B "${SOCKET_BASE}"_B2Dt
         case "${2:-fake}" in
             fake)
                 cd "$(pwd)/backend/fake"

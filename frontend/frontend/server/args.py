@@ -21,7 +21,7 @@ class ServerArgs:
     model_path: str
     server_host: str = "127.0.0.1"
     server_port: int = 1919
-    num_tokenizer: int = 0
+    num_tokenizer: int = 1
     silent_output: bool = False
 
     # Base path for ZMQ IPC files. When set, both frontend and backend can be
@@ -36,57 +36,33 @@ class ServerArgs:
             return self.socket_path
         return f"/tmp/learninfra{_get_pid_suffix()}"
 
-    @property
-    def share_tokenizer(self) -> bool:
-        return self.num_tokenizer == 0
-
-    # IPC slot numbering (mirrors SGLang's convention):
-    #   _0  tokenizer → backend
-    #   _1  backend   → detokenizer
-    #   _2  RESERVED  backend → detokenizer control channel (abort / state sync).
-    #                 Topology (decided): detokenizer binds PULL, backend
-    #                 connects PUSH — same shape as _1 in shared mode.
-    #                 Detokenizer owns the file lifecycle; when implemented,
-    #                 add _2 to frontend's rm list in run.sh and bind it in
-    #                 launch.py alongside _1. Today: unused, file never created.
-    #   _3  detokenizer → HTTP API
-    #   _4  HTTP API  → tokenizer (only when num_tokenizer > 0)
+    # IPC slot naming (directional, e.g. _B2Dt = "backend to detokenizer"):
+    #   _T2B   tokenizer  → backend     (backend binds PULL)
+    #   _B2Dt  backend    → detokenizer (backend binds PUSH, detok connects PULL)
+    #   _Dt2F  detokenizer → HTTP API   (HTTP binds PULL, detok connects PUSH)
+    #   _F2T   HTTP API   → tokenizer   (HTTP binds PUSH, tok connects PULL)
+    # Backend owns _T2B/_B2Dt file lifecycle; frontend owns _Dt2F/_F2T.
+    # run.sh cleanup mirrors that split so the two processes can start in any order.
 
     @property
     def zmq_backend_addr(self) -> str:
-        # Tokenizer → backend (scheduler) link
-        return f"ipc://{self.socket_base}_0"
+        # Tokenizer → backend link
+        return f"ipc://{self.socket_base}_T2B"
 
     @property
     def zmq_detokenizer_addr(self) -> str:
-        # Backend → detokenizer link (also the shared tokenizer addr when num_tokenizer=0)
-        return f"ipc://{self.socket_base}_1"
+        # Backend → detokenizer link
+        return f"ipc://{self.socket_base}_B2Dt"
 
     @property
     def zmq_frontend_addr(self) -> str:
         # Detokenizer → HTTP API link
-        return f"ipc://{self.socket_base}_3"
+        return f"ipc://{self.socket_base}_Dt2F"
 
     @property
     def zmq_tokenizer_addr(self) -> str:
-        # HTTP API → tokenizer link (distinct from detokenizer when num_tokenizer > 0)
-        if self.share_tokenizer:
-            return self.zmq_detokenizer_addr
-        result = f"ipc://{self.socket_base}_4"
-        assert result != self.zmq_detokenizer_addr
-        return result
-
-    @property
-    def tokenizer_create_addr(self) -> bool:
-        return self.share_tokenizer
-
-    @property
-    def backend_create_detokenizer_link(self) -> bool:
-        return not self.share_tokenizer
-
-    @property
-    def frontend_create_tokenizer_link(self) -> bool:
-        return not self.share_tokenizer
+        # HTTP API → tokenizer link
+        return f"ipc://{self.socket_base}_F2T"
 
 
 def parse_args(args: List[str], run_shell: bool = False) -> Tuple[ServerArgs, bool]:
@@ -130,7 +106,7 @@ def parse_args(args: List[str], run_shell: bool = False) -> Tuple[ServerArgs, bo
         "--tokenizer-count",
         type=int,
         default=ServerArgs.num_tokenizer,
-        help="The number of tokenizer processes to launch. 0 means the tokenizer is shared with the detokenizer.",
+        help="The number of tokenizer worker processes to launch (>=1). The detokenizer always runs as a separate process.",
     )
 
     parser.add_argument(
@@ -139,8 +115,8 @@ def parse_args(args: List[str], run_shell: bool = False) -> Tuple[ServerArgs, bo
         default=None,
         help=(
             "Base path for ZMQ IPC files. The frontend creates four sockets: "
-            "{socket_path}_0 (tokenizer→backend), _1 (backend→detokenizer), "
-            "_3 (detokenizer→HTTP), _4 (HTTP→tokenizer when num_tokenizer>0). "
+            "{socket_path}_T2B (tokenizer→backend), _B2Dt (backend→detokenizer), "
+            "_Dt2F (detokenizer→HTTP), _F2T (HTTP→tokenizer). "
             "Pass the same value to a separately-launched backend so it can connect. "
             "Defaults to a PID-suffixed /tmp/learninfra* path so concurrent instances "
             "don't collide."
